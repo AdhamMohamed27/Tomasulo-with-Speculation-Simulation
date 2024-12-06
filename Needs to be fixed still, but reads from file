@@ -1,0 +1,206 @@
+# simulator.py
+import sys
+import os
+
+# Simulator Constants
+REGISTER_COUNT = 8  # R0 to R7
+MEMORY_SIZE = 128 * 1024  # 128 KB word-addressable memory
+ROB_SIZE = 6  # reorder buffer size
+
+# Classes for Core Components
+class RegisterFile:
+    def __init__(self):
+        self.registers = [0] * REGISTER_COUNT
+        self.status = [None] * REGISTER_COUNT  # Track reservation stations
+
+    def read(self, reg_index):
+        return self.registers[reg_index]
+
+    def write(self, reg_index, value):
+        if reg_index != 0:  # R0 is read-only
+            self.registers[reg_index] = value
+
+    def set_status(self, reg_index, status):
+        self.status[reg_index] = status
+
+    def clear_status(self, reg_index):
+        self.status[reg_index] = None
+
+    def get_status(self, reg_index):
+        return self.status[reg_index]
+
+
+class Memory:
+    def __init__(self, size):
+        self.memory = [0] * size
+
+    def load(self, address):
+        return self.memory[address]
+
+    def store(self, address, value):
+        self.memory[address] = value
+
+
+# Global components
+register_file = RegisterFile()
+memory = Memory(MEMORY_SIZE)
+
+
+# Instruction Representation
+class Instruction:
+    def __init__(self, operation, operands):
+        self.operation = operation
+        self.operands = operands
+
+
+def parse_instruction(line):
+    parts = line.strip().split()
+    operation = parts[0]
+    operands = [op.strip(',') for op in parts[1:]]
+    return Instruction(operation, operands)
+
+
+def load_program(file_path):
+    instructions = []
+    try:
+        with open(file_path, 'r') as file:
+            for line in file:
+                if line.strip():
+                    instructions.append(parse_instruction(line))
+    except FileNotFoundError:
+        print(f"Error: File {file_path} not found.")
+        sys.exit(1)
+    return instructions
+
+
+class InstructionQueue:
+    def __init__(self):
+        self.queue = []
+
+    def add(self, instruction):
+        self.queue.append(instruction)
+
+    def fetch(self):
+        return self.queue.pop(0) if self.queue else None
+
+    def is_empty(self):
+        return len(self.queue) == 0
+
+
+class ReservationStation:
+    def __init__(self, name, num_stations, execution_cycles):
+        self.name = name
+        self.num_stations = num_stations
+        self.execution_cycles = execution_cycles
+        self.stations = [{'busy': False, 'op': None, 'Vj': None, 'Vk': None, 'Qj': None, 'Qk': None, 'cycles_left': 0}
+                         for _ in range(num_stations)]
+
+    def is_available(self):
+        return any(not station['busy'] for station in self.stations)
+
+    def allocate(self, op, Vj=None, Vk=None, Qj=None, Qk=None):
+        for station in self.stations:
+            if not station['busy']:
+                station.update({'busy': True, 'op': op, 'Vj': Vj, 'Vk': Vk, 'Qj': Qj, 'Qk': Qk, 'cycles_left': self.execution_cycles})
+                return station
+        return None
+
+    def execute(self):
+        for station in self.stations:
+            if station['busy'] and station['cycles_left'] > 0:
+                station['cycles_left'] -= 1
+                if station['cycles_left'] == 0:
+                    return station  # Execution completed
+        return None
+
+    def release(self, station):
+        station.update({'busy': False, 'op': None, 'Vj': None, 'Vk': None, 'Qj': None, 'Qk': None, 'cycles_left': 0})
+
+
+# Dynamic mapping for instruction types to reservation stations
+reservation_station_config = {
+    "LOAD": {"stations": 2, "execution_cycles": 6},
+    "STORE": {"stations": 1, "execution_cycles": 6},
+    "ADD": {"stations": 4, "execution_cycles": 2},
+    "SUB": {"stations": 4, "execution_cycles": 2},
+    "MUL": {"stations": 1, "execution_cycles": 8},
+    "DIV": {"stations": 1, "execution_cycles": 10},
+    # Add more operations as necessary
+}
+
+
+# Function to initialize reservation stations dynamically based on the instructions
+def initialize_reservation_stations(instructions):
+    stations = {}
+    # Check which operations are in the program and create reservation stations for them
+    for instr in instructions:
+        if instr.operation not in stations and instr.operation in reservation_station_config:
+            config = reservation_station_config[instr.operation]
+            stations[instr.operation] = ReservationStation(instr.operation, config["stations"], config["execution_cycles"])
+    return stations
+
+
+# In the main part of the simulation
+if __name__ == "__main__":
+    print("Welcome to Tomasulo Simulator!")
+
+    # Load program from file
+    program = load_program(r"C:\Users\Lenovo\OneDrive\Desktop\Arc_Project2\Test1.txt")
+    instruction_queue = InstructionQueue()
+
+    # Add instructions to the queue
+    for instr in program:
+        instruction_queue.add(instr)
+
+    # Dynamically initialize reservation stations based on instructions
+    reservation_stations = initialize_reservation_stations(program)
+
+    # Simulate cycles
+    cycle = 0
+    while not instruction_queue.is_empty() or any(station['busy'] for station in sum([rs.stations for rs in reservation_stations.values()], [])):
+        cycle += 1
+        print(f"Cycle {cycle}:")
+
+        # Issue stage
+        if not instruction_queue.is_empty():
+            instr = instruction_queue.fetch()
+            station = reservation_stations.get(instr.operation)
+
+            if station and station.is_available():
+                if instr.operation == "LOAD":
+                    reg_dest = int(instr.operands[0][1])  # Extract the register number from R1 (e.g., R1 -> 1)
+                    offset, reg_base = instr.operands[1].split('(')
+                    reg_base = int(reg_base[1:-1])  # Remove 'R' and ')' to get the base register number
+                    Vj = register_file.read(reg_base)
+                    Vk = int(offset)
+                    station.allocate(op="LOAD", Vj=Vj, Vk=Vk)
+                    print(f"LOAD issued: R{reg_dest} <- Mem[{Vj} + {Vk}]")
+
+                elif instr.operation == "ADD":
+                    reg_dest = int(instr.operands[0][1])  # Extract the register number from R3 (e.g., R3 -> 3)
+                    reg1 = int(instr.operands[1][1])  # R1 -> 1
+                    reg2 = int(instr.operands[2][1])  # R4 -> 4
+                    Vj = register_file.read(reg1)
+                    Vk = register_file.read(reg2)
+                    station.allocate(op="ADD", Vj=Vj, Vk=Vk)
+                    print(f"ADD issued: R{reg_dest} <- {Vj} + {Vk}")
+
+                elif instr.operation == "STORE":
+                    reg_src = int(instr.operands[0][1:])  # Extract the register number from R3 (e.g., R3 -> 3)
+                    offset, reg_base = instr.operands[1].split('(')
+                    offset = int(offset)
+                    reg_base = int(reg_base[1:-1])  # Remove 'R' and ')' to get the base register number
+                    Vj = register_file.read(reg_src)
+                    Vk = offset + register_file.read(reg_base)
+                    station.allocate(op="STORE", Vj=Vj, Vk=Vk)
+                    print(f"STORE issued: Mem[{Vk}] <- R{reg_src}")
+
+
+        # Execution stage
+        for station in reservation_stations.values():
+            completed_station = station.execute()
+            if completed_station:
+                print(f"{station.name} completed: {completed_station['op']}")
+                station.release(completed_station)
+
+        print()  # Add a newline between cycles
