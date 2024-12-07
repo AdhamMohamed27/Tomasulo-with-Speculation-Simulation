@@ -176,6 +176,12 @@ def execute_and_commit(reservation_station, register_file, reorder_buffer, curre
         if rob_entry:
             rob_entry['state'] = 'write'
 
+        # Add write_exec to metadata when the instruction is written back
+        for entry in metadata:
+            if entry['instruction'] == completed_station['op'] and entry.get('write_exec') is None:
+                entry['write_exec'] = current_cycle  # Set write execution time
+                break
+
         metadata.append({
             "instruction": completed_station['op'],
             "finish_exec": current_cycle
@@ -237,9 +243,10 @@ if __name__ == "__main__":
 
     # Print out the performance metrics
     print("\nPerformance Metrics:")
-    print("Instruction | Issued | Start Exec | Finish Exec")
+    print("Instruction | Issued | Start Exec | Finish Exec | Write Exec")
     for entry in instruction_metadata:
         issued = entry.get('issued', 'N/A')
         start_exec = entry.get('start_exec', 'N/A')
         finish_exec = entry.get('finish_exec', 'N/A')
-        print(f"{entry['instruction']:12} | {issued:6} | {start_exec:10} | {finish_exec:10}")
+        written_exec = entry.get('write_exec', 'N/A')
+        print(f"{entry['instruction']:12} | {issued:6} | {start_exec:10} | {finish_exec:10} | {written_exec:10}")
