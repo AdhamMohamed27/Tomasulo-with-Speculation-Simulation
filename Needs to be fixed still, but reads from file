@@ -1,33 +1,28 @@
-# simulator.py
 import sys
-import os
 
 # Simulator Constants
 REGISTER_COUNT = 8  # R0 to R7
 MEMORY_SIZE = 128 * 1024  # 128 KB word-addressable memory
-ROB_SIZE = 6  # reorder buffer size
 
-# Classes for Core Components
 class RegisterFile:
-    def __init__(self):
-        self.registers = [0] * REGISTER_COUNT
-        self.status = [None] * REGISTER_COUNT  # Track reservation stations
+    def __init__(self, num_registers):
+        self.values = [0] * num_registers  # Register values
+        self.status = [None] * num_registers  # None if register is ready
 
-    def read(self, reg_index):
-        return self.registers[reg_index]
+    def get_value(self, reg_index):
+        return self.values[reg_index]
 
-    def write(self, reg_index, value):
-        if reg_index != 0:  # R0 is read-only
-            self.registers[reg_index] = value
+    def set_value(self, reg_index, value):
+        self.values[reg_index] = value
 
-    def set_status(self, reg_index, status):
-        self.status[reg_index] = status
+    def is_ready(self, reg_index):
+        return self.status[reg_index] is None
+
+    def set_status(self, reg_index, station_name):
+        self.status[reg_index] = station_name
 
     def clear_status(self, reg_index):
         self.status[reg_index] = None
-
-    def get_status(self, reg_index):
-        return self.status[reg_index]
 
 
 class Memory:
@@ -41,12 +36,6 @@ class Memory:
         self.memory[address] = value
 
 
-# Global components
-register_file = RegisterFile()
-memory = Memory(MEMORY_SIZE)
-
-
-# Instruction Representation
 class Instruction:
     def __init__(self, operation, operands):
         self.operation = operation
@@ -56,7 +45,8 @@ class Instruction:
 def parse_instruction(line):
     parts = line.strip().split()
     operation = parts[0]
-    operands = [op.strip(',') for op in parts[1:]]
+    # Split operands by commas, ensuring correct parsing
+    operands = [op.strip() for op in ','.join(parts[1:]).split(',')]
     return Instruction(operation, operands)
 
 
@@ -92,7 +82,7 @@ class ReservationStation:
         self.name = name
         self.num_stations = num_stations
         self.execution_cycles = execution_cycles
-        self.stations = [{'busy': False, 'op': None, 'Vj': None, 'Vk': None, 'Qj': None, 'Qk': None, 'cycles_left': 0}
+        self.stations = [{'busy': False, 'op': None, 'Vj': None, 'Vk': None, 'Qj': None, 'Qk': None, 'cycles_left': 0} 
                          for _ in range(num_stations)]
 
     def is_available(self):
@@ -110,97 +100,158 @@ class ReservationStation:
             if station['busy'] and station['cycles_left'] > 0:
                 station['cycles_left'] -= 1
                 if station['cycles_left'] == 0:
-                    return station  # Execution completed
+                    station['result'] = 42  # Example result
+                    return station
         return None
 
     def release(self, station):
         station.update({'busy': False, 'op': None, 'Vj': None, 'Vk': None, 'Qj': None, 'Qk': None, 'cycles_left': 0})
 
 
-# Dynamic mapping for instruction types to reservation stations
-reservation_station_config = {
-    "LOAD": {"stations": 2, "execution_cycles": 6},
-    "STORE": {"stations": 1, "execution_cycles": 6},
-    "ADD": {"stations": 4, "execution_cycles": 2},
-    "SUB": {"stations": 4, "execution_cycles": 2},
-    "MUL": {"stations": 1, "execution_cycles": 8},
-    "DIV": {"stations": 1, "execution_cycles": 10},
-    # Add more operations as necessary
-}
+class ReorderBuffer:
+    def __init__(self, size):
+        self.entries = [{'busy': False, 'instruction': None, 'state': 'issue', 'result': None} 
+                        for _ in range(size)]
+
+    def add(self, instruction):
+        for entry in self.entries:
+            if not entry['busy']:
+                entry.update({'busy': True, 'instruction': instruction, 'state': 'issue', 'result': None})
+                return entry
+        return None
+
+    def commit(self):
+        for entry in self.entries:
+            if entry['busy'] and entry['state'] == 'write':
+                entry.update({'busy': False, 'instruction': None, 'state': 'issue', 'result': None})
+                return True
+        return False
 
 
-# Function to initialize reservation stations dynamically based on the instructions
-def initialize_reservation_stations(instructions):
-    stations = {}
-    # Check which operations are in the program and create reservation stations for them
-    for instr in instructions:
-        if instr.operation not in stations and instr.operation in reservation_station_config:
-            config = reservation_station_config[instr.operation]
-            stations[instr.operation] = ReservationStation(instr.operation, config["stations"], config["execution_cycles"])
-    return stations
+def resolve_operands(register_file, operands):
+    """Resolves operands for an instruction, handling immediate and register addressing."""
+    Vj, Vk, Qj, Qk = None, None, None, None
+
+    # Resolve the first operand (destination register, e.g., R1)
+    if operands[0].startswith('R'):  # Check if it's a register
+        try:
+            reg_index = int(operands[0][1:])  # Extract index after 'R'
+            if register_file.is_ready(reg_index):
+                Vj = register_file.get_value(reg_index)
+            else:
+                Qj = register_file.status[reg_index]
+        except ValueError:
+            print(f"Invalid register format: {operands[0]}")
+            return None, None, None, None
+
+    # Resolve the second operand (e.g., source register or immediate like 4(R2))
+    if len(operands) > 1:
+        operand = operands[1]
+        if '(' in operand:  # Handle base-displacement addressing like 4(R2)
+            try:
+                offset, reg = operand.split('(')
+                reg = reg.strip(')')
+                reg_index = int(reg[1:])
+                if register_file.is_ready(reg_index):
+                    Vk = register_file.get_value(reg_index) + int(offset)
+                else:
+                    Qk = register_file.status[reg_index]
+            except ValueError:
+                print(f"Invalid operand format: {operand}")
+                return None, None, None, None
+        else:  # Handle simple register like R2 or immediate values
+            if operand.startswith('R'):
+                try:
+                    reg_index = int(operand[1:])
+                    if register_file.is_ready(reg_index):
+                        Vk = register_file.get_value(reg_index)
+                    else:
+                        Qk = register_file.status[reg_index]
+                except ValueError:
+                    print(f"Invalid register format: {operand}")
+                    return None, None, None, None
+            else:
+                # Operand could be an immediate value (like 4)
+                try:
+                    Vk = int(operand)
+                except ValueError:
+                    print(f"Invalid immediate value: {operand}")
+                    return None, None, None, None
+                
+    return Vj, Vk, Qj, Qk
 
 
-# In the main part of the simulation
+def execute_and_commit(reservation_station, register_file, reorder_buffer, current_cycle, metadata):
+    completed_station = reservation_station.execute()
+    if completed_station:
+        for reg_index, status in enumerate(register_file.status):
+            if status == reservation_station.name:
+                register_file.set_value(reg_index, completed_station['result'])
+                register_file.clear_status(reg_index)
+
+        rob_entry = reorder_buffer.add(completed_station['op'])
+        if rob_entry:
+            rob_entry['state'] = 'write'
+
+        metadata.append({
+            "instruction": completed_station['op'],
+            "finish_exec": current_cycle + 1  # Fix: Increment by 1 to reflect completion in the next cycle
+        })
+
+        reservation_station.release(completed_station)
+
+
 if __name__ == "__main__":
-    print("Welcome to Tomasulo Simulator!")
 
-    # Load program from file
+    register_file = RegisterFile(num_registers=REGISTER_COUNT)
+    reorder_buffer = ReorderBuffer(size=6)
     program = load_program(r"C:\Users\Lenovo\OneDrive\Desktop\Arc_Project2\Test1.txt")
     instruction_queue = InstructionQueue()
 
-    # Add instructions to the queue
     for instr in program:
         instruction_queue.add(instr)
 
-    # Dynamically initialize reservation stations based on instructions
-    reservation_stations = initialize_reservation_stations(program)
+    load_station = ReservationStation("LOAD", 2, 6)
+    add_station = ReservationStation("ADD/ADDI", 4, 2)
+    store_station = ReservationStation("STORE", 1, 6)
 
-    # Simulate cycles
-    cycle = 0
-    while not instruction_queue.is_empty() or any(station['busy'] for station in sum([rs.stations for rs in reservation_stations.values()], [])):
-        cycle += 1
-        print(f"Cycle {cycle}:")
+    current_cycle = 1
+    instruction_metadata = []
 
-        # Issue stage
+    while not instruction_queue.is_empty() or any(
+        station['busy'] for station_group in [load_station.stations, add_station.stations, store_station.stations]
+        for station in station_group
+    ):
+        print(f"Cycle {current_cycle}:")
+
         if not instruction_queue.is_empty():
             instr = instruction_queue.fetch()
-            station = reservation_stations.get(instr.operation)
+            print(f"Fetched Instruction: {instr.operation}, Operands: {instr.operands}")
+            Vj, Vk, Qj, Qk = resolve_operands(register_file, instr.operands)
 
-            if station and station.is_available():
-                if instr.operation == "LOAD":
-                    reg_dest = int(instr.operands[0][1])  # Extract the register number from R1 (e.g., R1 -> 1)
-                    offset, reg_base = instr.operands[1].split('(')
-                    reg_base = int(reg_base[1:-1])  # Remove 'R' and ')' to get the base register number
-                    Vj = register_file.read(reg_base)
-                    Vk = int(offset)
-                    station.allocate(op="LOAD", Vj=Vj, Vk=Vk)
-                    print(f"LOAD issued: R{reg_dest} <- Mem[{Vj} + {Vk}]")
+            if instr.operation == "LOAD" and load_station.is_available():
+                station = load_station.allocate(op=instr.operation, Vj=Vj, Vk=Vk, Qj=Qj, Qk=Qk)
+                reg_index = int(instr.operands[0][1:])
+                register_file.set_status(reg_index, "LOAD")
+                instruction_metadata.append({"instruction": instr.operation, "issued": current_cycle})
+            elif instr.operation == "STORE" and store_station.is_available():
+                station = store_station.allocate(op=instr.operation, Vj=Vj, Vk=Vk, Qj=Qj, Qk=Qk)
+                instruction_metadata.append({"instruction": instr.operation, "issued": current_cycle})
+            elif instr.operation in ["ADD", "ADDI"] and add_station.is_available():
+                station = add_station.allocate(op=instr.operation, Vj=Vj, Vk=Vk, Qj=Qj, Qk=Qk)
+                reg_index = int(instr.operands[0][1:])
+                register_file.set_status(reg_index, "ADD")
+                instruction_metadata.append({"instruction": instr.operation, "issued": current_cycle})
 
-                elif instr.operation == "ADD":
-                    reg_dest = int(instr.operands[0][1])  # Extract the register number from R3 (e.g., R3 -> 3)
-                    reg1 = int(instr.operands[1][1])  # R1 -> 1
-                    reg2 = int(instr.operands[2][1])  # R4 -> 4
-                    Vj = register_file.read(reg1)
-                    Vk = register_file.read(reg2)
-                    station.allocate(op="ADD", Vj=Vj, Vk=Vk)
-                    print(f"ADD issued: R{reg_dest} <- {Vj} + {Vk}")
+        execute_and_commit(load_station, register_file, reorder_buffer, current_cycle, instruction_metadata)
+        execute_and_commit(add_station, register_file, reorder_buffer, current_cycle, instruction_metadata)
+        execute_and_commit(store_station, register_file, reorder_buffer, current_cycle, instruction_metadata)
 
-                elif instr.operation == "STORE":
-                    reg_src = int(instr.operands[0][1:])  # Extract the register number from R3 (e.g., R3 -> 3)
-                    offset, reg_base = instr.operands[1].split('(')
-                    offset = int(offset)
-                    reg_base = int(reg_base[1:-1])  # Remove 'R' and ')' to get the base register number
-                    Vj = register_file.read(reg_src)
-                    Vk = offset + register_file.read(reg_base)
-                    station.allocate(op="STORE", Vj=Vj, Vk=Vk)
-                    print(f"STORE issued: Mem[{Vk}] <- R{reg_src}")
+        current_cycle += 1
 
-
-        # Execution stage
-        for station in reservation_stations.values():
-            completed_station = station.execute()
-            if completed_station:
-                print(f"{station.name} completed: {completed_station['op']}")
-                station.release(completed_station)
-
-        print()  # Add a newline between cycles
+    print("\nPerformance Metrics:")
+    print("Instruction | Issued | Finish Exec")
+    for entry in instruction_metadata:
+         issued = entry.get('issued', 'N/A')
+         finish_exec = entry.get('finish_exec', 'N/A')
+         print(f"{entry['instruction']:12} | {issued:6} | {finish_exec:8}")
