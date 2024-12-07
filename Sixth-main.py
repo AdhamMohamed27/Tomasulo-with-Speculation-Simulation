@@ -294,3 +294,5 @@ if __name__ == "__main__":
         written_exec = entry.get('write_exec', 'N/A')
         commit = entry.get('commit', 'N/A')
         print(f"{entry['instruction']:12} | {issued:6} | {start_exec:10} | {finish_exec:10} | {written_exec:10} | {commit:6}")
+
+
