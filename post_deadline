@@ -315,16 +315,30 @@ def main():
             nand_station.allocate(current_instruction.operation, Vj=Vj, Vk=Vk, Qj=Qj, Qk=Qk)
         elif current_instruction.operation == "BEQ" and branch_station.is_available():
             reg1_index = int(current_instruction.operands[0][1:].replace(',', ''))
-            reg2_index = int(current_instruction.operands[0][1:].replace(',', ''))
-
+            reg2_index = int(current_instruction.operands[1][1:].replace(',', ''))  # Fixed operand index for reg2
+        
             if 0 <= reg1_index < REGISTER_COUNT and 0 <= reg2_index < REGISTER_COUNT:
                 Vj, Vk, _, _ = resolve_operands(register_file, current_instruction.operands)
                 if Vj == Vk:
                     print(f"Branch taken: {current_instruction.operands[0]} == {current_instruction.operands[1]}")
-                    instruction_queue=[]
-                branch_station.allocate(current_instruction.operation, Vj=Vj, Vk=Vk)
-            else:
-                print(f"Error: Register indices {reg1_index} or {reg2_index} out of bounds for BEQ operation.")
+                    
+                    # Determine the index of the current instruction in the instruction stream (instructions list)
+                    # Assuming the instructions are being fetched sequentially, you can calculate its index in the instruction list
+                    branch_index = instructions.index(current_instruction)
+                    
+                    # Flush the instruction queue
+                    instruction_queue.clear()
+        
+                    branch_target_offset = int(current_instruction.operands[2])  # assuming operands[2] is the offset
+                    branch_target_address = (branch_index + 1) + (branch_target_offset // 4)  # Calculate target instruction index
+        
+                    # Add instructions starting from the branch target address to the queue
+                    for i in range(branch_target_address, len(instructions)):
+                        print(f"Adding instruction {instructions[i].operation} {instructions[i].operands} to the queue.")
+                        instruction_queue.append(instructions[i])
+        
+                    break
+
 
         # Execute reservation stations for each cycle
         add_station.execute(register_file, memory)
