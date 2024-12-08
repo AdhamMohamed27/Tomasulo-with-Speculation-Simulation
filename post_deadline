@@ -37,13 +37,34 @@ class RegisterFile:
         
 class Memory:
     def __init__(self, size):
-        self.memory = [0] * size
+        # Initialize memory with the specified size (e.g., number of memory locations)
+        self.memory = [0] * size  # Initialize all memory locations to 0
 
     def load(self, address):
-        return self.memory[address]
+        # Load data from memory at a given address
+        if 0 <= address < len(self.memory):
+            return self.memory[address]
+        else:
+            raise ValueError(f"Address {address} out of bounds")
 
     def store(self, address, value):
-        self.memory[address] = value
+        # Store data in memory at a given address
+        if 0 <= address < len(self.memory):
+            self.memory[address] = value
+        else:
+            raise ValueError(f"Address {address} out of bounds")
+
+    def initialize_data(self, data_dict):
+        """
+        Initialize memory with values from a dictionary.
+        Example of data_dict: {address: value}
+        """
+        for address, value in data_dict.items():
+            self.store(address, value)
+
+    def __repr__(self):
+        # Optionally, you can provide a representation of the memory contents
+        return str(self.memory)
 
 
 def parse_instruction(line):
@@ -263,9 +284,16 @@ class ReorderBuffer:
 
 
 def main():
+    REGISTER_COUNT = 32  # Example number of registers
+    MEMORY_SIZE = 128    # Example size for memory
     register_file = RegisterFile(REGISTER_COUNT)
     memory = Memory(MEMORY_SIZE)
-    instruction_queue = []
+
+    # Initialize specific memory locations with values
+    memory.store(0, 42)  # Memory location 0 gets the value 42
+    memory.store(1, 100)  # Memory location 1 gets the value 100
+    memory.store(5, 255)  # Memory location 5 gets the value 255
+    memory.store(10, 123) # Memory location 10 gets the value 123
 
     # Initialize reservation stations for different operations
     add_station = ReservationStation("ADD", 4, 2, op_type="ADD")
@@ -278,18 +306,23 @@ def main():
     # Load instructions
     program_path = "test1"
     instructions = load_program(program_path)
-    # Add instructions to the queue
+    instruction_queue=[]
     for instr in instructions:
         instruction_queue.append(instr)
 
     clock_cycles = 0
     completed_instructions = 0
     total_instructions = len(instructions)
-    
-    while  instruction_queue:
+    executed_instructions = set()
+
+    while instruction_queue:
         current_instruction = instruction_queue.pop(0)
-        
-        # Dispatching instructions to reservation stations
+
+        # Skip already executed instructions
+        if current_instruction in executed_instructions:
+            continue
+
+        # Dispatch instructions to reservation stations
         if current_instruction.operation == "ADD" and add_station.is_available():
             Vj, Vk, Qj, Qk = resolve_operands(register_file, current_instruction.operands)
             add_station.allocate(current_instruction.operation, Vj=Vj, Vk=Vk, Qj=Qj, Qk=Qk)
@@ -299,14 +332,14 @@ def main():
         elif current_instruction.operation == "LOAD" and load_station.is_available():
             Vj, Vk, Qj, Qk = resolve_operands(register_file, current_instruction.operands)
             offset, reg_index = parse_memory_operand(current_instruction.operands[1])
-            if reg_index < REGISTER_COUNT:
+            if 0 <= reg_index < REGISTER_COUNT:  # Validate register access
                 load_station.allocate(current_instruction.operation, address=offset + register_file.get_value(reg_index), Vj=Vj, Vk=Vk, Qj=Qj, Qk=Qk)
             else:
                 print(f"Error: Register {reg_index} out of bounds for LOAD operation.")
         elif current_instruction.operation == "STORE" and store_station.is_available():
             Vj, Vk, Qj, Qk = resolve_operands(register_file, current_instruction.operands)
             offset, reg_index = parse_memory_operand(current_instruction.operands[1])
-            if reg_index < REGISTER_COUNT:
+            if 0 <= reg_index < REGISTER_COUNT:  # Validate register access
                 store_station.allocate(current_instruction.operation, Vj=Vj, address=offset + register_file.get_value(reg_index), Qj=Qj, Qk=Qk)
             else:
                 print(f"Error: Register {reg_index} out of bounds for STORE operation.")
@@ -322,11 +355,10 @@ def main():
                 if Vj == Vk:
                     print(f"Branch taken: {current_instruction.operands[0]} == {current_instruction.operands[1]}")
                     
-                    # Determine the index of the current instruction in the instruction stream (instructions list)
-                    # Assuming the instructions are being fetched sequentially, you can calculate its index in the instruction list
+                    # Determine the index of the current instruction in the instruction stream
                     branch_index = instructions.index(current_instruction)
                     
-                    # Flush the instruction queue
+                    # Flush the instruction queue and prepare for the branch target
                     instruction_queue.clear()
         
                     branch_target_offset = int(current_instruction.operands[2])  # assuming operands[2] is the offset
@@ -336,20 +368,19 @@ def main():
                     for i in range(branch_target_address, len(instructions)):
                         print(f"Adding instruction {instructions[i].operation} {instructions[i].operands} to the queue.")
                         instruction_queue.append(instructions[i])
-        
-                    break
 
+        # Update clock cycle here
+        clock_cycles += 1
 
         # Execute reservation stations for each cycle
         add_station.execute(register_file, memory)
-        add_station.execute(register_file, memory)
+        addi_station.execute(register_file, memory)
         load_station.execute(register_file, memory)
         store_station.execute(register_file, memory)
         nand_station.execute(register_file, memory)
         branch_station.execute(register_file, memory)
 
-        # Check if instructions can issue, start execution, or commit
-        # Inside your main function
+        # Handle instruction issue, start execution, finish execution, write result, and commit cycles
         for instruction in instructions:
             if instruction.can_issue(clock_cycles):
                 instruction.issue_cycle = clock_cycles
@@ -362,13 +393,13 @@ def main():
             if instruction.can_commit(clock_cycles):
                 instruction.commit_cycle = clock_cycles
 
-
-        # Release completed stations
+        # Release completed stations and track execution
         completed_station_add = add_station.release(add_station)
         if completed_station_add:
             completed_instructions += 1
+            executed_instructions.add(current_instruction)  # Mark as executed
         
-        completed_station_addi = addi_station.release(add_station)
+        completed_station_addi = addi_station.release(addi_station)
         if completed_station_addi:
             completed_instructions += 1
         
@@ -388,8 +419,6 @@ def main():
         if completed_station_branch:
             completed_instructions += 1
 
-        clock_cycles += 1
-
         if completed_instructions == total_instructions:
             print(f"All instructions completed in {clock_cycles} cycles.")
             break
@@ -399,11 +428,13 @@ def main():
         print(f"ICP (Instruction Completion Percent): {icp:.2f}%")
         
         # Print instruction execution table
+        print(clock_cycles)
         print("Instruction Execution Table:")
         print(f"{'Instruction':<20}{'Issue':<10}{'Start Exec':<15}{'Finish Exec':<15}{'Write Result':<15}{'Commit':<10}")
         for instr in instructions:
             print(f"{instr.name:<20}{instr.issue_cycle:<10}{instr.start_exec_cycle:<15}{instr.finish_exec_cycle:<15}"
                   f"{instr.write_result_cycle:<15}{instr.commit_cycle:<10}")
+
 
         # Calculate IPC
         total_cycles = max(instr.commit_cycle for instr in instructions)
@@ -414,4 +445,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
