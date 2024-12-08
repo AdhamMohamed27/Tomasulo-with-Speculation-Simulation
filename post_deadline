@@ -1,0 +1,256 @@
+import sys
+import re
+
+def parse_memory_operand(operand):
+    match = re.match(r"(\d+)\((R\d+)\)", operand)
+    if match:
+        immediate = int(match.group(1))  # The immediate value (e.g., 4)
+        register = int(match.group(2)[1])  # Extract the register number (e.g., R2 -> 2)
+        return immediate, register
+    else:
+        raise ValueError(f"Invalid memory operand format: {operand}")
+# Simulator Constants
+REGISTER_COUNT = 8  # R0 to R7
+MEMORY_SIZE = 128 * 1024  # 128 KB word-addressable memory
+
+class RegisterFile:
+    def __init__(self, num_registers):
+        self.values = [0] * num_registers  # Register values
+        self.status = [None] * num_registers  # None if register is ready
+
+    def get_value(self, reg_index):
+        return self.values[reg_index]
+
+    def set_value(self, reg_index, value):
+        self.values[reg_index] = value
+
+    def is_ready(self, reg_index):
+        return self.status[reg_index] is None
+
+    def set_status(self, reg_index, station_name):
+        self.status[reg_index] = station_name
+
+    def clear_status(self, reg_index):
+        self.status[reg_index] = None
+        
+class Memory:
+    def __init__(self, size):
+        self.memory = [0] * size
+
+    def load(self, address):
+        return self.memory[address]
+
+    def store(self, address, value):
+        self.memory[address] = value
+
+class Instruction:
+    def __init__(self, operation, operands):
+        self.operation = operation
+        self.operands = operands
+        
+def parse_instruction(line):
+    parts = line.strip().split()
+    operation = parts[0]
+    operands = [op.strip(',') for op in parts[1:]]
+    return Instruction(operation, operands)
+
+def load_program(file_path):
+    instructions = []
+    try:
+        with open(file_path, 'r') as file:
+            for line in file:
+                if line.strip():
+                    instructions.append(parse_instruction(line))
+    except FileNotFoundError:
+        print(f"Error: File {file_path} not found.")
+        sys.exit(1)
+    return instructions
+
+class InstructionQueue:
+    def __init__(self):
+        self.queue = []
+
+    def add(self, instruction):
+        self.queue.append(instruction)
+
+    def fetch(self):
+        return self.queue.pop(0) if self.queue else None
+
+    def is_empty(self):
+        return len(self.queue) == 0
+        
+    def flush(self):
+        """Flush the entire queue."""
+        self.queue = []
+    
+    def flush_after(self, branch_index):
+        # Remove all instructions after the branch_index
+        self.queue = self.queue[:branch_index + 1]
+
+
+class ReservationStation:
+    def __init__(self, name, num_stations, execution_cycles, op_type=None):
+        self.name = name
+        self.num_stations = num_stations
+        self.execution_cycles = execution_cycles
+        self.op_type = op_type
+        self.stations = [{'busy': False, 'op': None, 'Vj': None, 'Vk': None, 'Qj': None, 'Qk': None, 'cycles_left': 0, 'address': None}
+                         for _ in range(num_stations)]
+
+    def is_available(self):
+        return any(not station['busy'] for station in self.stations)
+
+    def allocate(self, op, Vj=None, Vk=None, Qj=None, Qk=None, address=None):
+        for station in self.stations:
+            if not station['busy']:
+                station.update({'busy': True, 'op': op, 'Vj': Vj, 'Vk': Vk, 'Qj': Qj, 'Qk': Qk, 'cycles_left': self.execution_cycles, 'address': address})
+                return station
+        return None
+
+    def execute(self, register_file, memory):
+        for station in self.stations:
+            if station['busy'] and station['cycles_left'] > 0:
+                station['cycles_left'] -= 1
+    
+                # Execution logic for different operations
+                if station['cycles_left'] == 0:
+                    if station['op'] == "ADD":
+                        result = station['Vj'] + station['Vk']
+                        print(f"ADD Result: {result}")
+                    elif station['op'] == "SUB":
+                        result = station['Vj'] - station['Vk']
+                        print(f"SUB Result: {result}")
+                    elif station['op'] == "LOAD":
+                        result = memory.load(station['address'])
+                        print(f"LOAD Result: {result}")
+                    elif station['op'] == "STORE":
+                        memory.store(station['address'], station['Vj'])
+                        print(f"STORE: Stored {station['Vj']} at address {station['address']}")
+    
+                    # Store the result back to the register if needed
+                    if station['op'] in ["ADD", "SUB"]:
+                        # Ensure Qj is not None before using it as an index
+                        if station['Qj'] is not None:
+                            register_file.set_value(station['Qj'], result)
+                        else:
+                            print(f"Warning: Qj is None, skipping write back.")
+    
+                    # Release the station after execution
+                    station['busy'] = False
+                    return station
+        return None
+
+
+    def release(self, station):
+        station.update({'busy': False, 'op': None, 'Vj': None, 'Vk': None, 'Qj': None, 'Qk': None, 'cycles_left': 0, 'address': None})
+
+
+def main():
+    register_file = RegisterFile(REGISTER_COUNT)
+    memory = Memory(MEMORY_SIZE)
+    instruction_queue = InstructionQueue()
+
+    # Initialize reservation stations for different operations
+    add_station = ReservationStation("ADD", 2, 2, op_type="ADD")
+    sub_station = ReservationStation("SUB", 2, 2, op_type="SUB")
+    load_station = ReservationStation("LOAD", 2, 1, op_type="LOAD")
+    store_station = ReservationStation("STORE", 2, 1, op_type="STORE")
+    nand_station = ReservationStation("NAND", 2, 2, op_type="NAND")  # Added NAND station
+    branch_station = ReservationStation("BEQ", 2, 1, op_type="BEQ")  # Added Branch station
+    
+    # Load instructions
+    program_path = "test1"
+    instructions = load_program(program_path)
+    
+    # Add instructions to the queue
+    for instr in instructions:
+        instruction_queue.add(instr)
+
+    clock_cycles = 0
+    completed_instructions = 0
+    total_instructions = len(instructions)
+    
+    while not instruction_queue.is_empty():
+        current_instruction = instruction_queue.fetch()
+        
+        # Dispatching instructions to reservation stations
+        if current_instruction.operation == "ADD" and add_station.is_available():
+            # Ensure correct register indices (0-7)
+            add_station.allocate(current_instruction.operation, Vj=register_file.get_value(1), Vk=register_file.get_value(2))
+        elif current_instruction.operation == "SUB" and sub_station.is_available():
+            sub_station.allocate(current_instruction.operation, Vj=register_file.get_value(3), Vk=register_file.get_value(4))
+        elif current_instruction.operation == "LOAD" and load_station.is_available():
+            offset, reg_index = parse_memory_operand(current_instruction.operands[1])
+            if reg_index < REGISTER_COUNT:
+                load_station.allocate(current_instruction.operation, address=offset + register_file.get_value(reg_index))
+            else:
+                print(f"Error: Register {reg_index} out of bounds for LOAD operation.")
+        elif current_instruction.operation == "STORE" and store_station.is_available():
+            offset, reg_index = parse_memory_operand(current_instruction.operands[1])
+            if reg_index < REGISTER_COUNT:
+                store_station.allocate(current_instruction.operation, Vj=register_file.get_value(1), address=offset + register_file.get_value(reg_index))
+            else:
+                print(f"Error: Register {reg_index} out of bounds for STORE operation.")
+        elif current_instruction.operation == "NAND" and nand_station.is_available():  # Dispatch NAND operation
+            nand_station.allocate(current_instruction.operation, Vj=register_file.get_value(5), Vk=register_file.get_value(6))
+        elif current_instruction.operation == "BEQ" and branch_station.is_available():  # Dispatch branch operation
+            # Ensure register indices are within bounds
+            if 7 < REGISTER_COUNT and 8 < REGISTER_COUNT:
+                branch_station.allocate(current_instruction.operation, Vj=register_file.get_value(7), Vk=register_file.get_value(8))
+            else:
+                print("Error: Register index out of bounds for BEQ operation.")
+
+        # Execute operations
+        add_station.execute(register_file, memory)
+        sub_station.execute(register_file, memory)
+        load_station.execute(register_file, memory)
+        store_station.execute(register_file, memory)
+        nand_station.execute(register_file, memory)  # Execute NAND
+        branch_station.execute(register_file, memory)  # Execute branch
+
+        # Release completed stations
+        completed_station_add = add_station.execute(register_file, memory)
+        if completed_station_add:
+            add_station.release(completed_station_add)
+            completed_instructions += 1
+        
+        completed_station_sub = sub_station.execute(register_file, memory)
+        if completed_station_sub:
+            sub_station.release(completed_station_sub)
+            completed_instructions += 1
+        
+        completed_station_load = load_station.execute(register_file, memory)
+        if completed_station_load:
+            load_station.release(completed_station_load)
+            completed_instructions += 1
+        
+        completed_station_store = store_station.execute(register_file, memory)
+        if completed_station_store:
+            store_station.release(completed_station_store)
+            completed_instructions += 1
+        
+        completed_station_nand = nand_station.execute(register_file, memory)
+        if completed_station_nand:
+            nand_station.release(completed_station_nand)
+            completed_instructions += 1
+        
+        completed_station_branch = branch_station.execute(register_file, memory)
+        if completed_station_branch:
+            branch_station.release(completed_station_branch)
+            completed_instructions += 1
+
+        # Print status (register file, memory, and clock cycles)
+        print(f"Clock cycle {clock_cycles}")
+        print("Register file:", register_file.values)
+        print("Memory:", memory.memory[:10])
+        clock_cycles += 1
+
+    # Calculate ICP (Instruction Completion Percent)
+    if total_instructions > 0:
+        icp = (completed_instructions / total_instructions) * 100
+        print(f"ICP (Instruction Completion Percent): {icp}%")
+
+if __name__ == "__main__":
+    main()
+
+
