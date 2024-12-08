@@ -9,6 +9,13 @@ def parse_memory_operand(operand):
         return immediate, register
     else:
         raise ValueError(f"Invalid memory operand format: {operand}")
+        
+def parse_instruction(line):
+    parts = line.split()  # Splitting the line by spaces
+    operation = parts[0]  # The first part is the operation
+    operands = parts[1:]  # The rest are the operands
+    return Instruction(operation, operands)
+
 # Simulator Constants
 REGISTER_COUNT = 8  # R0 to R7
 MEMORY_SIZE = 128 * 1024  # 128 KB word-addressable memory
@@ -43,16 +50,25 @@ class Memory:
     def store(self, address, value):
         self.memory[address] = value
 
-class Instruction:
-    def __init__(self, operation, operands):
-        self.operation = operation
-        self.operands = operands
-        
+
 def parse_instruction(line):
-    parts = line.strip().split()
-    operation = parts[0]
-    operands = [op.strip(',') for op in parts[1:]]
-    return Instruction(operation, operands)
+    # Split the line into operation and operands
+    parts = line.split()
+    operation = parts[0]  # First part is the operation (e.g., ADD, SUB, LOAD, etc.)
+    operands = parts[1:]  # Everything after the first part is an operand
+    
+    # Handle the case where there are no operands (optional, depending on your needs)
+    if len(operands) == 0:
+        operands = None  # Or an empty list depending on how you want to handle this
+    
+    # For now, we will set 'name' to be the operation (e.g., ADD, LOAD, etc.)
+    # You might want to improve this if you need specific instruction names or labels
+    name = operation
+    
+    # Return the Instruction object with the parsed values
+    return Instruction(name, operation, operands)
+
+
 
 def load_program(file_path):
     instructions = []
@@ -66,19 +82,38 @@ def load_program(file_path):
         sys.exit(1)
     return instructions
 
-class InstructionQueue:
-    def __init__(self):
-        self.queue = []
+class Instruction:
+    def __init__(self, name, operation, operands):
+        self.name = name
+        self.operation = operation
+        self.operands = operands
+        self.issue_cycle = None
+        self.start_exec_cycle = None
+        self.finish_exec_cycle = None
+        self.write_result_cycle = None
+        self.commit_cycle = None
+    
+    def can_issue(self, current_cycle):
+        # Implement the logic to check if the instruction can be issued at the current cycle
+        # For example, you can check if operands are ready or if there is space in the reservation station
+        return self.issue_cycle is None
+    
+    def can_start_execution(self, current_cycle):
+        # Implement the logic to check if the instruction can start execution at the current cycle
+        return self.issue_cycle is not None and self.start_exec_cycle is None
+    
+    def can_finish_execution(self, current_cycle):
+        # Implement the logic to check if the instruction can finish execution at the current cycle
+        return self.start_exec_cycle is not None and self.finish_exec_cycle is None
+    
+    def can_write_result(self, current_cycle):
+        # Implement the logic to check if the instruction can write the result at the current cycle
+        return self.finish_exec_cycle is not None and self.write_result_cycle is None
+    
+    def can_commit(self, current_cycle):
+        # Implement the logic to check if the instruction can commit at the current cycle
+        return self.write_result_cycle is not None and self.commit_cycle is None
 
-    def add(self, instruction):
-        self.queue.append(instruction)
-
-    def fetch(self):
-        return self.queue.pop(0) if self.queue else None
-
-    def is_empty(self):
-        return len(self.queue) == 0
-        
     def flush(self):
         """Flush the entire queue."""
         self.queue = []
@@ -94,8 +129,11 @@ class ReservationStation:
         self.num_stations = num_stations
         self.execution_cycles = execution_cycles
         self.op_type = op_type
-        self.stations = [{'busy': False, 'op': None, 'Vj': None, 'Vk': None, 'Qj': None, 'Qk': None, 'cycles_left': 0, 'address': None}
-                         for _ in range(num_stations)]
+        self.stations = [self._create_station() for _ in range(num_stations)]
+
+    def _create_station(self):
+        """ Helper method to create a new station (dictionary). """
+        return {'busy': False, 'op': None, 'Vj': None, 'Vk': None, 'Qj': None, 'Qk': None, 'cycles_left': 0, 'address': None}
 
     def is_available(self):
         return any(not station['busy'] for station in self.stations)
@@ -103,7 +141,14 @@ class ReservationStation:
     def allocate(self, op, Vj=None, Vk=None, Qj=None, Qk=None, address=None):
         for station in self.stations:
             if not station['busy']:
-                station.update({'busy': True, 'op': op, 'Vj': Vj, 'Vk': Vk, 'Qj': Qj, 'Qk': Qk, 'cycles_left': self.execution_cycles, 'address': address})
+                station['busy'] = True
+                station['op'] = op
+                station['Vj'] = Vj
+                station['Vk'] = Vk
+                station['Qj'] = Qj
+                station['Qk'] = Qk
+                station['cycles_left'] = self.execution_cycles
+                station['address'] = address
                 return station
         return None
 
@@ -140,32 +185,36 @@ class ReservationStation:
                     return station
         return None
 
-
     def release(self, station):
-        station.update({'busy': False, 'op': None, 'Vj': None, 'Vk': None, 'Qj': None, 'Qk': None, 'cycles_left': 0, 'address': None})
+        """ Reset station attributes using a helper method. """
+        if station in self.stations:  # Check if station is valid within the reservation station list
+            self.stations[self.stations.index(station)] = self._create_station()  # Reset station values
 
 def resolve_operands(register_file, operands):
     Vj, Vk, Qj, Qk = None, None, None, None
-
+    
+    # Check the first operand
     if operands[0].startswith('R'):  # First operand, for example, "R1"
-        reg_index = int(operands[0][1:])  # Extract register index (e.g., "R1" -> 1)
+        reg_index = int(operands[0][1:].rstrip(','))  # Remove 'R' and any trailing commas
         if 0 <= reg_index < REGISTER_COUNT:
-            Vj = register_file.get_value(reg_index)
-            if register_file.status[reg_index] is not None:  # Register is pending
-                Qj = register_file.status[reg_index]
+            Vj = register_file.get_value(reg_index)  # Get the value from the register file
+            if register_file.status[reg_index] is not None:  # Check if the register is pending
+                Qj = register_file.status[reg_index]  # Set the pending register's tag
         else:
             print(f"Error: Register {reg_index} out of bounds for operand {operands[0]}")
 
-    if operands[1].startswith('R'):  # Second operand, for example, "R0"
-        reg_index = int(operands[1][1:])  # Extract register index (e.g., "R0" -> 0)
+    # Check the second operand (if exists)
+    if len(operands) > 1 and operands[1].startswith('R'):  # Second operand, for example, "R0"
+        reg_index = int(operands[1][1:].rstrip(','))  # Remove 'R' and any trailing commas
         if 0 <= reg_index < REGISTER_COUNT:
-            Vk = register_file.get_value(reg_index)
-            if register_file.status[reg_index] is not None:  # Register is pending
-                Qk = register_file.status[reg_index]
+            Vk = register_file.get_value(reg_index)  # Get the value from the register file
+            if register_file.status[reg_index] is not None:  # Check if the register is pending
+                Qk = register_file.status[reg_index]  # Set the pending register's tag
         else:
             print(f"Error: Register {reg_index} out of bounds for operand {operands[1]}")
 
     return Vj, Vk, Qj, Qk
+
 
 class ReorderBuffer:
     def __init__(self, size):
@@ -182,13 +231,11 @@ class ReorderBuffer:
         """ Adds an instruction to the reorder buffer. """
         for entry in self.entries:
             if not entry['busy']:  # Find an empty slot
-                entry.update({
-                    'busy': True,
-                    'instruction': instruction,
-                    'state': 'issue',
-                    'result': None,
-                    'destination': destination  # Where to write the result, if any
-                })
+                entry['busy'] = True
+                entry['instruction'] = instruction
+                entry['state'] = 'issue'
+                entry['result'] = None
+                entry['destination'] = destination  # Where to write the result, if any
                 return entry
         return None
 
@@ -220,98 +267,10 @@ class ReorderBuffer:
         return False
 
 
-
-    def __init__(self, instructions):
-        self.instructions = instructions
-        self.current_cycle = 0
-        self.instruction_states = []  # To track each instruction's lifecycle
-    
-    def simulate(self):
-        while not self.is_program_complete():
-            self.current_cycle += 1
-            self.advance_simulation()
-        
-        self.print_results()
-
-    def advance_simulation(self):
-        # Process instructions and update their states (e.g., issue, execute, write, commit)
-        for instruction in self.instructions:
-            if instruction.can_issue(self.current_cycle):
-                instruction.issue_cycle = self.current_cycle
-            if instruction.can_start_execution(self.current_cycle):
-                instruction.start_exec_cycle = self.current_cycle
-            if instruction.can_finish_execution(self.current_cycle):
-                instruction.finish_exec_cycle = self.current_cycle
-            if instruction.can_write_result(self.current_cycle):
-                instruction.write_result_cycle = self.current_cycle
-            if instruction.can_commit(self.current_cycle):
-                instruction.commit_cycle = self.current_cycle
-
-    def is_program_complete(self):
-        return all(instr.commit_cycle > 0 for instr in self.instructions)
-
-    def print_results(self):
-        print("Instruction Execution Table:")
-        print(f"{'Instruction':<20}{'Issue':<10}{'Start Exec':<15}{'Finish Exec':<15}{'Write Result':<15}{'Commit':<10}")
-        
-        total_instructions = len(self.instructions)
-        total_cycles = 0
-        
-        for instr in self.instructions:
-            print(f"{instr.name:<20}{instr.issue_cycle:<10}{instr.start_exec_cycle:<15}{instr.finish_exec_cycle:<15}"
-                  f"{instr.write_result_cycle:<15}{instr.commit_cycle:<10}")
-            total_cycles = max(total_cycles, instr.commit_cycle)
-        
-        ipc = total_instructions / total_cycles if total_cycles > 0 else 0
-        print("\nSimulation Results:")
-        print(f"Total Cycles: {total_cycles}")
-        print(f"IPC: {ipc:.2f}")
-
-def simulate(instructions):
-    current_cycle = 0
-    while not is_program_complete(instructions):
-        current_cycle += 1
-        advance_simulation(instructions, current_cycle)
-    print_results(instructions)
-
-def advance_simulation(instructions, current_cycle):
-    for instruction in instructions:
-        if instruction.can_issue(current_cycle):
-            instruction.issue_cycle = current_cycle
-        if instruction.can_start_execution(current_cycle):
-            instruction.start_exec_cycle = current_cycle
-        if instruction.can_finish_execution(current_cycle):
-            instruction.finish_exec_cycle = current_cycle
-        if instruction.can_write_result(current_cycle):
-            instruction.write_result_cycle = current_cycle
-        if instruction.can_commit(current_cycle):
-            instruction.commit_cycle = current_cycle
-
-def is_program_complete(instructions):
-    return all(instr.commit_cycle > 0 for instr in instructions)
-
-def print_results(instructions):
-    print("Instruction Execution Table:")
-    print(f"{'Instruction':<20}{'Issue':<10}{'Start Exec':<15}{'Finish Exec':<15}{'Write Result':<15}{'Commit':<10}")
-    
-    total_instructions = len(instructions)
-    total_cycles = 0
-    
-    for instr in instructions:
-        print(f"{instr.name:<20}{instr.issue_cycle:<10}{instr.start_exec_cycle:<15}{instr.finish_exec_cycle:<15}"
-              f"{instr.write_result_cycle:<15}{instr.commit_cycle:<10}")
-        total_cycles = max(total_cycles, instr.commit_cycle)
-    
-    ipc = total_instructions / total_cycles if total_cycles > 0 else 0
-    print("\nSimulation Results:")
-    print(f"Total Cycles: {total_cycles}")
-    print(f"IPC: {ipc:.2f}")
-
-
 def main():
     register_file = RegisterFile(REGISTER_COUNT)
     memory = Memory(MEMORY_SIZE)
-    instruction_queue = InstructionQueue()
+    instruction_queue = []
 
     # Initialize reservation stations for different operations
     add_station = ReservationStation("ADD", 2, 2, op_type="ADD")
@@ -320,132 +279,129 @@ def main():
     store_station = ReservationStation("STORE", 1, 6, op_type="STORE")
     nand_station = ReservationStation("NAND", 2, 2, op_type="NAND")
     branch_station = ReservationStation("BEQ", 2, 1, op_type="BEQ")
-
+    
     # Load instructions
     program_path = "test1"
     instructions = load_program(program_path)
-    
     # Add instructions to the queue
     for instr in instructions:
-        instruction_queue.add(instr)
+        instruction_queue.append(instr)
 
     clock_cycles = 0
     completed_instructions = 0
     total_instructions = len(instructions)
     
-    # Headers for the table
-    print(f"{'Cycle':<6}{'ADD':<20}{'LOAD':<20}{'STORE':<20}{'NAND':<20}{'BEQ':<20}")
-
-    while not instruction_queue.is_empty():
-        current_instruction = instruction_queue.fetch()
-
-        # Initialize row for the current cycle
-        cycle_row = f"{clock_cycles:<6}"
-
-        # Dispatch instructions to reservation stations
+    while  instruction_queue:
+        current_instruction = instruction_queue.pop(0)
+        
+        # Dispatching instructions to reservation stations
         if current_instruction.operation == "ADD" and add_station.is_available():
             Vj, Vk, Qj, Qk = resolve_operands(register_file, current_instruction.operands)
             add_station.allocate(current_instruction.operation, Vj=Vj, Vk=Vk, Qj=Qj, Qk=Qk)
-            result = add_station.execute(register_file, memory)
-            cycle_row += f"ADD Result: {result:<15}"
-        else:
-            cycle_row += f"ADD Pending{' ' * 4}"
-
-        if current_instruction.operation == "LOAD" and load_station.is_available():
+        elif current_instruction.operation == "SUB" and sub_station.is_available():
+            Vj, Vk, Qj, Qk = resolve_operands(register_file, current_instruction.operands)
+            sub_station.allocate(current_instruction.operation, Vj=Vj, Vk=Vk, Qj=Qj, Qk=Qk)
+        elif current_instruction.operation == "LOAD" and load_station.is_available():
             Vj, Vk, Qj, Qk = resolve_operands(register_file, current_instruction.operands)
             offset, reg_index = parse_memory_operand(current_instruction.operands[1])
             if reg_index < REGISTER_COUNT:
                 load_station.allocate(current_instruction.operation, address=offset + register_file.get_value(reg_index), Vj=Vj, Vk=Vk, Qj=Qj, Qk=Qk)
-                result = load_station.execute(register_file, memory)
-                cycle_row += f"LOAD Result: {result:<15}"
             else:
-                cycle_row += "LOAD Error       "
-        else:
-            cycle_row += "LOAD Pending      "
-
-        if current_instruction.operation == "STORE" and store_station.is_available():
+                print(f"Error: Register {reg_index} out of bounds for LOAD operation.")
+        elif current_instruction.operation == "STORE" and store_station.is_available():
             Vj, Vk, Qj, Qk = resolve_operands(register_file, current_instruction.operands)
             offset, reg_index = parse_memory_operand(current_instruction.operands[1])
             if reg_index < REGISTER_COUNT:
                 store_station.allocate(current_instruction.operation, Vj=Vj, address=offset + register_file.get_value(reg_index), Qj=Qj, Qk=Qk)
-                result = store_station.execute(register_file, memory)
-                cycle_row += f"STORE: Stored {result} at address {offset + register_file.get_value(reg_index)}"
             else:
-                cycle_row += "STORE Error      "
-        else:
-            cycle_row += "STORE Pending     "
-        
-        if current_instruction.operation == "NAND" and nand_station.is_available():
+                print(f"Error: Register {reg_index} out of bounds for STORE operation.")
+        elif current_instruction.operation == "NAND" and nand_station.is_available():
             Vj, Vk, Qj, Qk = resolve_operands(register_file, current_instruction.operands)
             nand_station.allocate(current_instruction.operation, Vj=Vj, Vk=Vk, Qj=Qj, Qk=Qk)
-            result = nand_station.execute(register_file, memory)
-            cycle_row += f"NAND Result: {result:<15}"
-        else:
-            cycle_row += "NAND Pending      "
+        elif current_instruction.operation == "BEQ" and branch_station.is_available():
+            reg1_index = int(current_instruction.operands[0][1:].replace(',', ''))
+            reg2_index = int(current_instruction.operands[0][1:].replace(',', ''))
 
-        if current_instruction.operation == "BEQ" and branch_station.is_available():
-            reg1_index = int(current_instruction.operands[0][1:])
-            reg2_index = int(current_instruction.operands[1][1:])
             if 0 <= reg1_index < REGISTER_COUNT and 0 <= reg2_index < REGISTER_COUNT:
                 Vj, Vk, _, _ = resolve_operands(register_file, current_instruction.operands)
                 if Vj == Vk:
-                    cycle_row += f"Branch taken: {current_instruction.operands[0]} == {current_instruction.operands[1]}"
-                    instruction_queue.flush_after(len(instruction_queue.queue) - 1)
-                else:
-                    cycle_row += "Branch not taken "
+                    print(f"Branch taken: {current_instruction.operands[0]} == {current_instruction.operands[1]}")
+                    instruction_queue=[]
+                branch_station.allocate(current_instruction.operation, Vj=Vj, Vk=Vk)
             else:
-                cycle_row += "BEQ Error         "
-        else:
-            cycle_row += "BEQ Pending        "
+                print(f"Error: Register indices {reg1_index} or {reg2_index} out of bounds for BEQ operation.")
 
-        # Print the cycle row for the current cycle
-        print(cycle_row)
+        # Execute reservation stations for each cycle
+        add_station.execute(register_file, memory)
+        sub_station.execute(register_file, memory)
+        load_station.execute(register_file, memory)
+        store_station.execute(register_file, memory)
+        nand_station.execute(register_file, memory)
+        branch_station.execute(register_file, memory)
+
+        # Check if instructions can issue, start execution, or commit
+        # Inside your main function
+        for instruction in instructions:
+            if instruction.can_issue(clock_cycles):
+                instruction.issue_cycle = clock_cycles
+            if instruction.can_start_execution(clock_cycles):
+                instruction.start_exec_cycle = clock_cycles
+            if instruction.can_finish_execution(clock_cycles):
+                instruction.finish_exec_cycle = clock_cycles
+            if instruction.can_write_result(clock_cycles):
+                instruction.write_result_cycle = clock_cycles
+            if instruction.can_commit(clock_cycles):
+                instruction.commit_cycle = clock_cycles
+
 
         # Release completed stations
-        completed_station_add = add_station.execute(register_file, memory)
+        completed_station_add = add_station.release(add_station)
         if completed_station_add:
-            add_station.release(completed_station_add)
             completed_instructions += 1
-
-        completed_station_sub = sub_station.execute(register_file, memory)
+        
+        completed_station_sub = sub_station.release(sub_station)
         if completed_station_sub:
-            sub_station.release(completed_station_sub)
             completed_instructions += 1
         
-        completed_station_load = load_station.execute(register_file, memory)
+        completed_station_load = load_station.release(load_station)
         if completed_station_load:
-            load_station.release(completed_station_load)
             completed_instructions += 1
         
-        completed_station_store = store_station.execute(register_file, memory)
+        completed_station_store = store_station.release(store_station)
         if completed_station_store:
-            store_station.release(completed_station_store)
             completed_instructions += 1
         
-        completed_station_nand = nand_station.execute(register_file, memory)
+        completed_station_nand = nand_station.release(nand_station)
         if completed_station_nand:
-            nand_station.release(completed_station_nand)
             completed_instructions += 1
         
-        completed_station_branch = branch_station.execute(register_file, memory)
+        completed_station_branch = branch_station.release(branch_station)
         if completed_station_branch:
-            branch_station.release(completed_station_branch)
             completed_instructions += 1
 
         clock_cycles += 1
 
-        # Commit results from reorder buffer after execution
         if completed_instructions == total_instructions:
+            print(f"All instructions completed in {clock_cycles} cycles.")
             break
 
-    # Calculate ICP (Instruction Completion Percent)
-    if total_instructions > 0:
+        # Calculate ICP (Instruction Completion Percent)
         icp = (completed_instructions / total_instructions) * 100
-        print(f"\nICP (Instruction Completion Percent): {icp}%")
+        print(f"ICP (Instruction Completion Percent): {icp:.2f}%")
+        
+        # Print instruction execution table
+        print("Instruction Execution Table:")
+        print(f"{'Instruction':<20}{'Issue':<10}{'Start Exec':<15}{'Finish Exec':<15}{'Write Result':<15}{'Commit':<10}")
+        for instr in instructions:
+            print(f"{instr.name:<20}{instr.issue_cycle:<10}{instr.start_exec_cycle:<15}{instr.finish_exec_cycle:<15}"
+                  f"{instr.write_result_cycle:<15}{instr.commit_cycle:<10}")
 
-
-
-
+        # Calculate IPC
+        total_cycles = max(instr.commit_cycle for instr in instructions)
+        ipc = total_instructions / total_cycles if total_cycles > 0 else 0
+        print(f"\nSimulation Results:")
+        print(f"Total Cycles: {total_cycles}")
+        print(f"IPC: {ipc:.2f}")
 
 if __name__ == "__main__":
     main()
