@@ -10,11 +10,6 @@ def parse_memory_operand(operand):
     else:
         raise ValueError(f"Invalid memory operand format: {operand}")
         
-def parse_instruction(line):
-    parts = line.split()  # Splitting the line by spaces
-    operation = parts[0]  # The first part is the operation
-    operands = parts[1:]  # The rest are the operands
-    return Instruction(operation, operands)
 
 # Simulator Constants
 REGISTER_COUNT = 8  # R0 to R7
@@ -54,7 +49,7 @@ class Memory:
 def parse_instruction(line):
     # Split the line into operation and operands
     parts = line.split()
-    operation = parts[0]  # First part is the operation (e.g., ADD, SUB, LOAD, etc.)
+    operation = parts[0]  # First part is the operation (e.g., ADD, ADDI, LOAD, etc.)
     operands = parts[1:]  # Everything after the first part is an operand
     
     # Handle the case where there are no operands (optional, depending on your needs)
@@ -162,9 +157,9 @@ class ReservationStation:
                     if station['op'] == "ADD":
                         result = station['Vj'] + station['Vk']
                         print(f"ADD Result: {result}")
-                    elif station['op'] == "SUB":
-                        result = station['Vj'] - station['Vk']
-                        print(f"SUB Result: {result}")
+                    elif station['op'] == "ADDI":
+                        result = station['Vj'] + station['Vk']
+                        print(f"ADDI Result: {result}")
                     elif station['op'] == "LOAD":
                         result = memory.load(station['address'])
                         print(f"LOAD Result: {result}")
@@ -173,7 +168,7 @@ class ReservationStation:
                         print(f"STORE: Stored {station['Vj']} at address {station['address']}")
     
                     # Store the result back to the register if needed
-                    if station['op'] in ["ADD", "SUB"]:
+                    if station['op'] in ["ADD", "ADDI"]:
                         # Ensure Qj is not None before using it as an index
                         if station['Qj'] is not None:
                             register_file.set_value(station['Qj'], result)
@@ -273,8 +268,8 @@ def main():
     instruction_queue = []
 
     # Initialize reservation stations for different operations
-    add_station = ReservationStation("ADD", 2, 2, op_type="ADD")
-    sub_station = ReservationStation("SUB", 2, 2, op_type="SUB")
+    add_station = ReservationStation("ADD", 4, 2, op_type="ADD")
+    addi_station = ReservationStation("ADDI", 4, 2, op_type="ADDI")
     load_station = ReservationStation("LOAD", 2, 6, op_type="LOAD")
     store_station = ReservationStation("STORE", 1, 6, op_type="STORE")
     nand_station = ReservationStation("NAND", 2, 2, op_type="NAND")
@@ -298,9 +293,9 @@ def main():
         if current_instruction.operation == "ADD" and add_station.is_available():
             Vj, Vk, Qj, Qk = resolve_operands(register_file, current_instruction.operands)
             add_station.allocate(current_instruction.operation, Vj=Vj, Vk=Vk, Qj=Qj, Qk=Qk)
-        elif current_instruction.operation == "SUB" and sub_station.is_available():
+        elif current_instruction.operation == "ADDI" and addi_station.is_available():
             Vj, Vk, Qj, Qk = resolve_operands(register_file, current_instruction.operands)
-            sub_station.allocate(current_instruction.operation, Vj=Vj, Vk=Vk, Qj=Qj, Qk=Qk)
+            addi_station.allocate(current_instruction.operation, Vj=Vj, Vk=Vk, Qj=Qj, Qk=Qk)
         elif current_instruction.operation == "LOAD" and load_station.is_available():
             Vj, Vk, Qj, Qk = resolve_operands(register_file, current_instruction.operands)
             offset, reg_index = parse_memory_operand(current_instruction.operands[1])
@@ -333,7 +328,7 @@ def main():
 
         # Execute reservation stations for each cycle
         add_station.execute(register_file, memory)
-        sub_station.execute(register_file, memory)
+        add_station.execute(register_file, memory)
         load_station.execute(register_file, memory)
         store_station.execute(register_file, memory)
         nand_station.execute(register_file, memory)
@@ -359,8 +354,8 @@ def main():
         if completed_station_add:
             completed_instructions += 1
         
-        completed_station_sub = sub_station.release(sub_station)
-        if completed_station_sub:
+        completed_station_addi = addi_station.release(add_station)
+        if completed_station_addi:
             completed_instructions += 1
         
         completed_station_load = load_station.release(load_station)
@@ -405,5 +400,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
