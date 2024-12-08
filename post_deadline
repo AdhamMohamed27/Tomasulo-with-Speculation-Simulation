@@ -143,14 +143,16 @@ class ReservationStation:
 
     def release(self, station):
         station.update({'busy': False, 'op': None, 'Vj': None, 'Vk': None, 'Qj': None, 'Qk': None, 'cycles_left': 0, 'address': None})
+
 def resolve_operands(register_file, operands):
-    # Handle register operands, assuming they are in the format like R0, R1, etc.
     Vj, Vk, Qj, Qk = None, None, None, None
 
     if operands[0].startswith('R'):  # First operand, for example, "R1"
         reg_index = int(operands[0][1:])  # Extract register index (e.g., "R1" -> 1)
         if 0 <= reg_index < REGISTER_COUNT:
             Vj = register_file.get_value(reg_index)
+            if register_file.status[reg_index] is not None:  # Register is pending
+                Qj = register_file.status[reg_index]
         else:
             print(f"Error: Register {reg_index} out of bounds for operand {operands[0]}")
 
@@ -158,15 +160,13 @@ def resolve_operands(register_file, operands):
         reg_index = int(operands[1][1:])  # Extract register index (e.g., "R0" -> 0)
         if 0 <= reg_index < REGISTER_COUNT:
             Vk = register_file.get_value(reg_index)
+            if register_file.status[reg_index] is not None:  # Register is pending
+                Qk = register_file.status[reg_index]
         else:
             print(f"Error: Register {reg_index} out of bounds for operand {operands[1]}")
 
-    # If operands are not registers (like constants or memory addresses), handle them accordingly
-    # For example, if operands are immediate values or memory locations, handle them differently
-    # If needed, you can implement logic here for non-register operands as well.
-
-    # Return the resolved values (Vj, Vk, Qj, Qk)
     return Vj, Vk, Qj, Qk
+
 
 
 
