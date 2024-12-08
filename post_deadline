@@ -167,8 +167,145 @@ def resolve_operands(register_file, operands):
 
     return Vj, Vk, Qj, Qk
 
+class ReorderBuffer:
+    def __init__(self, size):
+        # Each entry holds:
+        # - 'busy': whether the entry is occupied
+        # - 'instruction': the actual instruction
+        # - 'state': current state of the instruction ('issue', 'execute', 'write', 'commit')
+        # - 'result': the computed result, or None if not yet computed
+        # - 'destination': destination register, if the instruction writes back
+        self.entries = [{'busy': False, 'instruction': None, 'state': 'issue', 'result': None, 'destination': None}
+                        for _ in range(size)]
+
+    def add(self, instruction, destination=None):
+        """ Adds an instruction to the reorder buffer. """
+        for entry in self.entries:
+            if not entry['busy']:  # Find an empty slot
+                entry.update({
+                    'busy': True,
+                    'instruction': instruction,
+                    'state': 'issue',
+                    'result': None,
+                    'destination': destination  # Where to write the result, if any
+                })
+                return entry
+        return None
+
+    def write_result(self, instruction, result):
+        """ Writes a result back to the reorder buffer when execution is complete. """
+        for entry in self.entries:
+            if entry['busy'] and entry['instruction'] == instruction:
+                entry['state'] = 'write'  # Once result is available, mark as ready to write
+                entry['result'] = result
+                return True
+        return False
+
+    def commit(self, current_cycle, metadata, register_file):
+        """ Commits completed instructions from the reorder buffer to the register file. """
+        for entry in self.entries:
+            if entry['busy'] and entry['state'] == 'write':  # Instruction is ready to commit
+                entry['state'] = 'commit'
+                entry['busy'] = False
+                # Update the register file or memory based on the instruction's result
+                if entry['destination']:
+                    register_file.write(entry['destination'], entry['result'])
+
+                # Also update metadata for instruction commit cycle
+                for meta in metadata:
+                    if meta['instruction'] == entry['instruction'] and meta.get('commit') is None:
+                        meta['commit'] = current_cycle
+                        break
+                return True
+        return False
 
 
+
+    def __init__(self, instructions):
+        self.instructions = instructions
+        self.current_cycle = 0
+        self.instruction_states = []  # To track each instruction's lifecycle
+    
+    def simulate(self):
+        while not self.is_program_complete():
+            self.current_cycle += 1
+            self.advance_simulation()
+        
+        self.print_results()
+
+    def advance_simulation(self):
+        # Process instructions and update their states (e.g., issue, execute, write, commit)
+        for instruction in self.instructions:
+            if instruction.can_issue(self.current_cycle):
+                instruction.issue_cycle = self.current_cycle
+            if instruction.can_start_execution(self.current_cycle):
+                instruction.start_exec_cycle = self.current_cycle
+            if instruction.can_finish_execution(self.current_cycle):
+                instruction.finish_exec_cycle = self.current_cycle
+            if instruction.can_write_result(self.current_cycle):
+                instruction.write_result_cycle = self.current_cycle
+            if instruction.can_commit(self.current_cycle):
+                instruction.commit_cycle = self.current_cycle
+
+    def is_program_complete(self):
+        return all(instr.commit_cycle > 0 for instr in self.instructions)
+
+    def print_results(self):
+        print("Instruction Execution Table:")
+        print(f"{'Instruction':<20}{'Issue':<10}{'Start Exec':<15}{'Finish Exec':<15}{'Write Result':<15}{'Commit':<10}")
+        
+        total_instructions = len(self.instructions)
+        total_cycles = 0
+        
+        for instr in self.instructions:
+            print(f"{instr.name:<20}{instr.issue_cycle:<10}{instr.start_exec_cycle:<15}{instr.finish_exec_cycle:<15}"
+                  f"{instr.write_result_cycle:<15}{instr.commit_cycle:<10}")
+            total_cycles = max(total_cycles, instr.commit_cycle)
+        
+        ipc = total_instructions / total_cycles if total_cycles > 0 else 0
+        print("\nSimulation Results:")
+        print(f"Total Cycles: {total_cycles}")
+        print(f"IPC: {ipc:.2f}")
+
+def simulate(instructions):
+    current_cycle = 0
+    while not is_program_complete(instructions):
+        current_cycle += 1
+        advance_simulation(instructions, current_cycle)
+    print_results(instructions)
+
+def advance_simulation(instructions, current_cycle):
+    for instruction in instructions:
+        if instruction.can_issue(current_cycle):
+            instruction.issue_cycle = current_cycle
+        if instruction.can_start_execution(current_cycle):
+            instruction.start_exec_cycle = current_cycle
+        if instruction.can_finish_execution(current_cycle):
+            instruction.finish_exec_cycle = current_cycle
+        if instruction.can_write_result(current_cycle):
+            instruction.write_result_cycle = current_cycle
+        if instruction.can_commit(current_cycle):
+            instruction.commit_cycle = current_cycle
+
+def is_program_complete(instructions):
+    return all(instr.commit_cycle > 0 for instr in instructions)
+
+def print_results(instructions):
+    print("Instruction Execution Table:")
+    print(f"{'Instruction':<20}{'Issue':<10}{'Start Exec':<15}{'Finish Exec':<15}{'Write Result':<15}{'Commit':<10}")
+    
+    total_instructions = len(instructions)
+    total_cycles = 0
+    
+    for instr in instructions:
+        print(f"{instr.name:<20}{instr.issue_cycle:<10}{instr.start_exec_cycle:<15}{instr.finish_exec_cycle:<15}"
+              f"{instr.write_result_cycle:<15}{instr.commit_cycle:<10}")
+        total_cycles = max(total_cycles, instr.commit_cycle)
+    
+    ipc = total_instructions / total_cycles if total_cycles > 0 else 0
+    print("\nSimulation Results:")
+    print(f"Total Cycles: {total_cycles}")
+    print(f"IPC: {ipc:.2f}")
 
 
 def main():
@@ -179,11 +316,11 @@ def main():
     # Initialize reservation stations for different operations
     add_station = ReservationStation("ADD", 2, 2, op_type="ADD")
     sub_station = ReservationStation("SUB", 2, 2, op_type="SUB")
-    load_station = ReservationStation("LOAD", 2, 1, op_type="LOAD")
-    store_station = ReservationStation("STORE", 2, 1, op_type="STORE")
-    nand_station = ReservationStation("NAND", 2, 2, op_type="NAND")  # Added NAND station
-    branch_station = ReservationStation("BEQ", 2, 1, op_type="BEQ")  # Added Branch station
-    
+    load_station = ReservationStation("LOAD", 2, 6, op_type="LOAD")
+    store_station = ReservationStation("STORE", 1, 6, op_type="STORE")
+    nand_station = ReservationStation("NAND", 2, 2, op_type="NAND")
+    branch_station = ReservationStation("BEQ", 2, 1, op_type="BEQ")
+
     # Load instructions
     program_path = "test1"
     instructions = load_program(program_path)
@@ -196,69 +333,80 @@ def main():
     completed_instructions = 0
     total_instructions = len(instructions)
     
+    # Headers for the table
+    print(f"{'Cycle':<6}{'ADD':<20}{'LOAD':<20}{'STORE':<20}{'NAND':<20}{'BEQ':<20}")
+
     while not instruction_queue.is_empty():
         current_instruction = instruction_queue.fetch()
-        
-        # Dispatching instructions to reservation stations
+
+        # Initialize row for the current cycle
+        cycle_row = f"{clock_cycles:<6}"
+
+        # Dispatch instructions to reservation stations
         if current_instruction.operation == "ADD" and add_station.is_available():
             Vj, Vk, Qj, Qk = resolve_operands(register_file, current_instruction.operands)
             add_station.allocate(current_instruction.operation, Vj=Vj, Vk=Vk, Qj=Qj, Qk=Qk)
-        elif current_instruction.operation == "SUB" and sub_station.is_available():
+            result = add_station.execute(register_file, memory)
+            cycle_row += f"ADD Result: {result:<15}"
+        else:
+            cycle_row += f"ADD Pending{' ' * 4}"
+
+        if current_instruction.operation == "LOAD" and load_station.is_available():
             Vj, Vk, Qj, Qk = resolve_operands(register_file, current_instruction.operands)
-            sub_station.allocate(current_instruction.operation, Vj=Vj, Vk=Vk, Qj=Qj, Qk=Qk)
-        elif current_instruction.operation == "LOAD" and load_station.is_available():
-            Vj, Vk, Qj, Qk = resolve_operands(register_file, current_instruction.operands)
-            offset, reg_index = parse_memory_operand(current_instruction.operands[1])  # Handle base-displacement for memory operand
+            offset, reg_index = parse_memory_operand(current_instruction.operands[1])
             if reg_index < REGISTER_COUNT:
                 load_station.allocate(current_instruction.operation, address=offset + register_file.get_value(reg_index), Vj=Vj, Vk=Vk, Qj=Qj, Qk=Qk)
+                result = load_station.execute(register_file, memory)
+                cycle_row += f"LOAD Result: {result:<15}"
             else:
-                print(f"Error: Register {reg_index} out of bounds for LOAD operation.")
-        elif current_instruction.operation == "STORE" and store_station.is_available():
+                cycle_row += "LOAD Error       "
+        else:
+            cycle_row += "LOAD Pending      "
+
+        if current_instruction.operation == "STORE" and store_station.is_available():
             Vj, Vk, Qj, Qk = resolve_operands(register_file, current_instruction.operands)
-            offset, reg_index = parse_memory_operand(current_instruction.operands[1])  # Handle base-displacement for memory operand
+            offset, reg_index = parse_memory_operand(current_instruction.operands[1])
             if reg_index < REGISTER_COUNT:
                 store_station.allocate(current_instruction.operation, Vj=Vj, address=offset + register_file.get_value(reg_index), Qj=Qj, Qk=Qk)
+                result = store_station.execute(register_file, memory)
+                cycle_row += f"STORE: Stored {result} at address {offset + register_file.get_value(reg_index)}"
             else:
-                print(f"Error: Register {reg_index} out of bounds for STORE operation.")
-        elif current_instruction.operation == "NAND" and nand_station.is_available():  # Dispatch NAND operation
+                cycle_row += "STORE Error      "
+        else:
+            cycle_row += "STORE Pending     "
+        
+        if current_instruction.operation == "NAND" and nand_station.is_available():
             Vj, Vk, Qj, Qk = resolve_operands(register_file, current_instruction.operands)
             nand_station.allocate(current_instruction.operation, Vj=Vj, Vk=Vk, Qj=Qj, Qk=Qk)
-        elif current_instruction.operation == "BEQ" and branch_station.is_available():  # Dispatch branch operation
-            # Parse register indices from operands (e.g., BEQ R7, R8)
-            reg1_index = int(current_instruction.operands[0][1:])  # e.g., R7 -> 7
-            reg2_index = int(current_instruction.operands[1][1:])  # e.g., R8 -> 8
-        
-            # Check if both registers are within the valid range
-            if 0 <= reg1_index < REGISTER_COUNT and 0 <= reg2_index < REGISTER_COUNT:
-                # Resolve operands to get values (Vj, Vk) and check if branch should be taken
-                Vj, Vk, _, _ = resolve_operands(register_file, current_instruction.operands)
-                
-                # Check if values are equal
-                if Vj == Vk:
-                    # If branch is taken, you can implement the jump logic here (e.g., modify the instruction queue)
-                    print(f"Branch taken: {current_instruction.operands[0]} == {current_instruction.operands[1]}")
-                    # Optional: Logic to adjust the instruction queue if you want to implement jumps
-                    # For example: instruction_queue.flush_after(branch_index) if branch is taken
-                    
-                # Allocate the branch operation
-                branch_station.allocate(current_instruction.operation, Vj=Vj, Vk=Vk)
-            else:
-                print(f"Error: Register indices {reg1_index} or {reg2_index} out of bounds for BEQ operation.")
+            result = nand_station.execute(register_file, memory)
+            cycle_row += f"NAND Result: {result:<15}"
+        else:
+            cycle_row += "NAND Pending      "
 
-        # Execute operations
-        add_station.execute(register_file, memory)
-        sub_station.execute(register_file, memory)
-        load_station.execute(register_file, memory)
-        store_station.execute(register_file, memory)
-        nand_station.execute(register_file, memory)  # Execute NAND
-        branch_station.execute(register_file, memory)  # Execute branch
+        if current_instruction.operation == "BEQ" and branch_station.is_available():
+            reg1_index = int(current_instruction.operands[0][1:])
+            reg2_index = int(current_instruction.operands[1][1:])
+            if 0 <= reg1_index < REGISTER_COUNT and 0 <= reg2_index < REGISTER_COUNT:
+                Vj, Vk, _, _ = resolve_operands(register_file, current_instruction.operands)
+                if Vj == Vk:
+                    cycle_row += f"Branch taken: {current_instruction.operands[0]} == {current_instruction.operands[1]}"
+                    instruction_queue.flush_after(len(instruction_queue.queue) - 1)
+                else:
+                    cycle_row += "Branch not taken "
+            else:
+                cycle_row += "BEQ Error         "
+        else:
+            cycle_row += "BEQ Pending        "
+
+        # Print the cycle row for the current cycle
+        print(cycle_row)
 
         # Release completed stations
         completed_station_add = add_station.execute(register_file, memory)
         if completed_station_add:
             add_station.release(completed_station_add)
             completed_instructions += 1
-        
+
         completed_station_sub = sub_station.execute(register_file, memory)
         if completed_station_sub:
             sub_station.release(completed_station_sub)
@@ -284,16 +432,19 @@ def main():
             branch_station.release(completed_station_branch)
             completed_instructions += 1
 
-        # Print status (register file, memory, and clock cycles)
-        print(f"Clock cycle {clock_cycles}")
-        print("Register file:", register_file.values)
-        print("Memory:", memory.memory[:10])
         clock_cycles += 1
+
+        # Commit results from reorder buffer after execution
+        if completed_instructions == total_instructions:
+            break
 
     # Calculate ICP (Instruction Completion Percent)
     if total_instructions > 0:
         icp = (completed_instructions / total_instructions) * 100
-        print(f"ICP (Instruction Completion Percent): {icp}%")
+        print(f"\nICP (Instruction Completion Percent): {icp}%")
+
+
+
 
 
 if __name__ == "__main__":
