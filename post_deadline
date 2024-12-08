@@ -143,6 +143,32 @@ class ReservationStation:
 
     def release(self, station):
         station.update({'busy': False, 'op': None, 'Vj': None, 'Vk': None, 'Qj': None, 'Qk': None, 'cycles_left': 0, 'address': None})
+def resolve_operands(register_file, operands):
+    # Handle register operands, assuming they are in the format like R0, R1, etc.
+    Vj, Vk, Qj, Qk = None, None, None, None
+
+    if operands[0].startswith('R'):  # First operand, for example, "R1"
+        reg_index = int(operands[0][1:])  # Extract register index (e.g., "R1" -> 1)
+        if 0 <= reg_index < REGISTER_COUNT:
+            Vj = register_file.get_value(reg_index)
+        else:
+            print(f"Error: Register {reg_index} out of bounds for operand {operands[0]}")
+
+    if operands[1].startswith('R'):  # Second operand, for example, "R0"
+        reg_index = int(operands[1][1:])  # Extract register index (e.g., "R0" -> 0)
+        if 0 <= reg_index < REGISTER_COUNT:
+            Vk = register_file.get_value(reg_index)
+        else:
+            print(f"Error: Register {reg_index} out of bounds for operand {operands[1]}")
+
+    # If operands are not registers (like constants or memory addresses), handle them accordingly
+    # For example, if operands are immediate values or memory locations, handle them differently
+    # If needed, you can implement logic here for non-register operands as well.
+
+    # Return the resolved values (Vj, Vk, Qj, Qk)
+    return Vj, Vk, Qj, Qk
+
+
 
 
 def main():
@@ -175,30 +201,49 @@ def main():
         
         # Dispatching instructions to reservation stations
         if current_instruction.operation == "ADD" and add_station.is_available():
-            # Ensure correct register indices (0-7)
-            add_station.allocate(current_instruction.operation, Vj=register_file.get_value(1), Vk=register_file.get_value(2))
+            Vj, Vk, Qj, Qk = resolve_operands(register_file, current_instruction.operands)
+            add_station.allocate(current_instruction.operation, Vj=Vj, Vk=Vk, Qj=Qj, Qk=Qk)
         elif current_instruction.operation == "SUB" and sub_station.is_available():
-            sub_station.allocate(current_instruction.operation, Vj=register_file.get_value(3), Vk=register_file.get_value(4))
+            Vj, Vk, Qj, Qk = resolve_operands(register_file, current_instruction.operands)
+            sub_station.allocate(current_instruction.operation, Vj=Vj, Vk=Vk, Qj=Qj, Qk=Qk)
         elif current_instruction.operation == "LOAD" and load_station.is_available():
-            offset, reg_index = parse_memory_operand(current_instruction.operands[1])
+            Vj, Vk, Qj, Qk = resolve_operands(register_file, current_instruction.operands)
+            offset, reg_index = parse_memory_operand(current_instruction.operands[1])  # Handle base-displacement for memory operand
             if reg_index < REGISTER_COUNT:
-                load_station.allocate(current_instruction.operation, address=offset + register_file.get_value(reg_index))
+                load_station.allocate(current_instruction.operation, address=offset + register_file.get_value(reg_index), Vj=Vj, Vk=Vk, Qj=Qj, Qk=Qk)
             else:
                 print(f"Error: Register {reg_index} out of bounds for LOAD operation.")
         elif current_instruction.operation == "STORE" and store_station.is_available():
-            offset, reg_index = parse_memory_operand(current_instruction.operands[1])
+            Vj, Vk, Qj, Qk = resolve_operands(register_file, current_instruction.operands)
+            offset, reg_index = parse_memory_operand(current_instruction.operands[1])  # Handle base-displacement for memory operand
             if reg_index < REGISTER_COUNT:
-                store_station.allocate(current_instruction.operation, Vj=register_file.get_value(1), address=offset + register_file.get_value(reg_index))
+                store_station.allocate(current_instruction.operation, Vj=Vj, address=offset + register_file.get_value(reg_index), Qj=Qj, Qk=Qk)
             else:
                 print(f"Error: Register {reg_index} out of bounds for STORE operation.")
         elif current_instruction.operation == "NAND" and nand_station.is_available():  # Dispatch NAND operation
-            nand_station.allocate(current_instruction.operation, Vj=register_file.get_value(5), Vk=register_file.get_value(6))
+            Vj, Vk, Qj, Qk = resolve_operands(register_file, current_instruction.operands)
+            nand_station.allocate(current_instruction.operation, Vj=Vj, Vk=Vk, Qj=Qj, Qk=Qk)
         elif current_instruction.operation == "BEQ" and branch_station.is_available():  # Dispatch branch operation
-            # Ensure register indices are within bounds
-            if 7 < REGISTER_COUNT and 8 < REGISTER_COUNT:
-                branch_station.allocate(current_instruction.operation, Vj=register_file.get_value(7), Vk=register_file.get_value(8))
+            # Parse register indices from operands (e.g., BEQ R7, R8)
+            reg1_index = int(current_instruction.operands[0][1:])  # e.g., R7 -> 7
+            reg2_index = int(current_instruction.operands[1][1:])  # e.g., R8 -> 8
+        
+            # Check if both registers are within the valid range
+            if 0 <= reg1_index < REGISTER_COUNT and 0 <= reg2_index < REGISTER_COUNT:
+                # Resolve operands to get values (Vj, Vk) and check if branch should be taken
+                Vj, Vk, _, _ = resolve_operands(register_file, current_instruction.operands)
+                
+                # Check if values are equal
+                if Vj == Vk:
+                    # If branch is taken, you can implement the jump logic here (e.g., modify the instruction queue)
+                    print(f"Branch taken: {current_instruction.operands[0]} == {current_instruction.operands[1]}")
+                    # Optional: Logic to adjust the instruction queue if you want to implement jumps
+                    # For example: instruction_queue.flush_after(branch_index) if branch is taken
+                    
+                # Allocate the branch operation
+                branch_station.allocate(current_instruction.operation, Vj=Vj, Vk=Vk)
             else:
-                print("Error: Register index out of bounds for BEQ operation.")
+                print(f"Error: Register indices {reg1_index} or {reg2_index} out of bounds for BEQ operation.")
 
         # Execute operations
         add_station.execute(register_file, memory)
@@ -249,6 +294,7 @@ def main():
     if total_instructions > 0:
         icp = (completed_instructions / total_instructions) * 100
         print(f"ICP (Instruction Completion Percent): {icp}%")
+
 
 if __name__ == "__main__":
     main()
