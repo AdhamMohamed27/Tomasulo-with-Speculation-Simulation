@@ -306,7 +306,7 @@ def main():
     call_ret_station = ReservationStation("CALL/RET", 2, 4)  # CALL/RET station
     
     # Load instructions
-    program_path = 'test1'
+    program_path = r'C:\Users\Toqa\Desktop\Tomasulo-with-speculation\sample_program.txt'
     instructions = load_program(program_path)
     instruction_queue=[]
     for instr in instructions:
@@ -386,7 +386,7 @@ def main():
         nand_station.execute(register_file, memory)
         branch_station.execute(register_file, memory)
         # Handle instruction issue, start execution, finish execution, write result, and commit cycles
-        
+
         for instruction in instructions:
             clock_cycles += 1
             print(f"End of Cycle {clock_cycles}:")
@@ -395,35 +395,23 @@ def main():
             if instruction.can_issue(clock_cycles):
                 instruction.issue_cycle = clock_cycles
                 print(f"Cycle {clock_cycles}: Issued {instruction.name}")
-                
                 if not instruction.can_issue(clock_cycles):
                  print(f"Cycle {clock_cycles}: Cannot issue {instruction.name}")
-                 
+                break
             if instruction.can_start_execution(clock_cycles):
                 instruction.start_exec_cycle = clock_cycles
-                print(f"Cycle {clock_cycles}: start {instruction.name}")
-                
-                if not instruction.can_start_execution(clock_cycles):
-                 print(f"Cycle {clock_cycles}: Cannot issue {instruction.name}")
-                 break
+                break
             if instruction.can_finish_execution(clock_cycles):
                 instruction.finish_exec_cycle = clock_cycles
-                print(f"Cycle {clock_cycles}: finish {instruction.name}")
-                if not instruction.can_finish_execution(clock_cycles):
-                 print(f"Cycle {clock_cycles}: Cannot issue {instruction.name}")
-                 
+                break
             if instruction.can_write_result(clock_cycles):
                 instruction.write_result_cycle = clock_cycles
-                print(f"Cycle {clock_cycles}: write result {instruction.name}")
-                if not instruction.can_write_result(clock_cycles):
-                 print(f"Cycle {clock_cycles}: Cannot issue {instruction.name}")
-                 
+                break
+                
             if instruction.can_commit(clock_cycles):
                 instruction.commit_cycle = clock_cycles
-                print(f"Cycle {clock_cycles}: commit {instruction.name}")
-                if not instruction.can_commit(clock_cycles):
-                 print(f"Cycle {clock_cycles}: Cannot issue {instruction.name}")
-                 
+                break
+                
 
             # Release completed stations and track execution
             completed_station_add = add_station.release(add_station)
@@ -484,159 +472,5 @@ def main():
         print(f"IPC: {ipc:.2f}")
 
 
-import tkinter as tk
-from tkinter import filedialog, messagebox
-from tkinter import ttk  # For advanced widgets like Treeview
-
-# Import your simulator components here
-# from your_simulator import RegisterFile, Memory, ReservationStation, load_program
-
-class SimulatorGUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Tomasulo Algorithm Simulator")
-        self.simulator_initialized = False
-
-        # Simulator backend components
-        self.register_file = RegisterFile(REGISTER_COUNT)
-        self.memory = Memory(MEMORY_SIZE)
-        self.clock_cycles = 0  # Tracks the number of cycles executed
-        self.instructions = []  # To store loaded instructions
-        self.instruction_queue = []  # Instruction queue
-        self.completed_instructions = 0
-
-        # UI Elements
-        self.create_widgets()
-
-
-        # UI Elements
-        self.create_widgets()
-
-    
-    
-    def create_widgets(self):
-        # Frame for loading program
-        frame_load = tk.Frame(self.root)
-        frame_load.pack(pady=10)
-        
-        tk.Label(frame_load, text="Program File:").pack(side=tk.LEFT)
-        self.program_path = tk.Entry(frame_load, width=50)
-        self.program_path.pack(side=tk.LEFT, padx=5)
-        tk.Button(frame_load, text="Browse", command=self.browse_file).pack(side=tk.LEFT, padx=5)
-        tk.Button(frame_load, text="Load Program", command=self.load_program).pack(side=tk.LEFT, padx=5)
-
-        # Frame for controls
-        frame_controls = tk.Frame(self.root)
-        frame_controls.pack(pady=10)
-
-        tk.Button(frame_controls, text="Step Cycle", command=self.step_cycle).pack(side=tk.LEFT, padx=5)
-        tk.Button(frame_controls, text="Run All", command=self.run_all).pack(side=tk.LEFT, padx=5)
-        
-        # Output section
-        frame_output = tk.Frame(self.root)
-        frame_output.pack(pady=10)
-        
-        # Memory display
-        tk.Label(frame_output, text="Memory State:").grid(row=0, column=0, padx=10, sticky="w")
-        self.memory_display = tk.Text(frame_output, height=10, width=50)
-        self.memory_display.grid(row=1, column=0, padx=10)
-        
-        # Register display
-        tk.Label(frame_output, text="Register State:").grid(row=0, column=1, padx=10, sticky="w")
-        self.register_display = tk.Text(frame_output, height=10, width=50)
-        self.register_display.grid(row=1, column=1, padx=10)
-
-        # Log display
-        tk.Label(frame_output, text="Execution Log:").grid(row=2, column=0, padx=10, sticky="w")
-        self.log_display = tk.Text(frame_output, height=10, width=100)
-        self.log_display.grid(row=3, column=0, columnspan=2, padx=10)
-
-    def browse_file(self):
-        file_path = filedialog.askopenfilename(filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")])
-        if file_path:
-            self.program_path.delete(0, tk.END)
-            self.program_path.insert(0, file_path)
-
-    def load_program(self):
-        program_file = self.program_path.get()
-        if not program_file:
-            messagebox.showerror("Error", "No program file selected.")
-            return
-        
-        # Initialize the simulator
-        try:
-            self.instructions = load_program(program_file)
-            self.simulator_initialized = True
-            self.log_display.insert(tk.END, f"Program loaded successfully: {program_file}\n")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to load program: {e}")
-
-    def step_cycle(self):
-        if not self.simulator_initialized:
-            messagebox.showerror("Error", "Load a program first.")
-            return
-
-        if self.completed_instructions >= len(self.instructions):
-            self.log_display.insert(tk.END, "Program execution completed.\n")
-            return
-
-        self.clock_cycles += 1
-        self.log_display.insert(tk.END, f"\n--- Cycle {self.clock_cycles} ---\n")
-
-        # Simulate one cycle
-        if self.instruction_queue:
-            current_instruction = self.instruction_queue.pop(0)
-            self.log_display.insert(tk.END, f"Executing: {current_instruction.name} {current_instruction.operands}\n")
-
-            # Example: Handle ADD instruction (extend for other instructions)
-            if current_instruction.operation == "ADD":
-                Vj, Vk, Qj, Qk = resolve_operands(self.register_file, current_instruction.operands)
-                result = Vj + Vk
-                self.register_file.set_value(int(current_instruction.operands[0][1:]), result)
-                self.log_display.insert(tk.END, f"ADD Result: {result} -> R{current_instruction.operands[0][1:]}\n")
-
-            # Add logic for other instruction types...
-
-        # Update GUI displays
-        self.update_register_display()
-        self.update_memory_display()
-
-        
-    def update_memory_display(self):
-        self.memory_display.delete(1.0, tk.END)
-        for i, value in enumerate(self.memory.memory[:32]):  # Show the first 32 memory locations
-            self.memory_display.insert(tk.END, f"Mem[{i}]: {value}\n")
-
-    def update_register_display(self):
-        self.register_display.delete(1.0, tk.END)
-        for i, value in enumerate(self.register_file.values):
-            self.register_display.insert(tk.END, f"R{i}: {value}\n")
-
-
-    def run_all(self):
-        if not self.simulator_initialized:
-            messagebox.showerror("Error", "Load a program first.")
-            return
-
-        # Run the simulator to completion
-        self.log_display.insert(tk.END, "Running all instructions...\n")
-        # Add logic to run all cycles
-
 if __name__ == "__main__":
-    # Create the main GUI window
-    root = tk.Tk()
-
-    # Initialize GUI
-    gui = SimulatorGUI(root)
-
-    # Load example program
-    gui.instructions = [
-        Instruction("ADD", "ADD", ["R1", "R2", "R3"]),
-        Instruction("LOAD", "LOAD", ["R4", "0(R5)"]),
-        Instruction("STORE", "STORE", ["R6", "4(R7)"])
-    ]
-    gui.instruction_queue = gui.instructions[:]
-    gui.simulator_initialized = True
-
-    # Start the GUI event loop
-    root.mainloop()
+    main()
