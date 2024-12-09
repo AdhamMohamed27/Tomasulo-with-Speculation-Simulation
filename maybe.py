@@ -497,5 +497,3 @@ if __name__ == "__main__":
 
 
 
-
-# r'C:\Users\Toqa\Desktop\Tomasulo-with-speculation\sample_program.txt'
