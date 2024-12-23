@@ -35,7 +35,5 @@ The project simulates instruction execution in a RISC processor architecture, su
 
 This project is for educational purposes only as part of CSCE 3301 at [Your University Name]. Unauthorized distribution or copying of the project code is prohibited.
 
----
 
-For questions or clarifications, feel free to reach out to the course instructor or the project team.
 
