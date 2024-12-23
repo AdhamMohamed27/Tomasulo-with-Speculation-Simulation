@@ -1,0 +1,7 @@
+LOAD R1, 4(R2)       
+ADD R3, R1, R4       
+STORE R5, 8(R6)      
+ADDI R5, R2, R7
+NAND R1, R2, R3
+MUL R3, R4, R5
+BEQ R1, R2, 1
