@@ -33,7 +33,7 @@ The project simulates instruction execution in a RISC processor architecture, su
 
 ## License
 
-This project is for educational purposes only as part of CSCE 3301 at [Your University Name]. Unauthorized distribution or copying of the project code is prohibited.
+This project is for educational purposes only as part of CSCE 3301 at AUC. Unauthorized distribution or copying of the project code is not accepted.
 
 
 
